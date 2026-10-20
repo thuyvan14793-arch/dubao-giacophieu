@@ -1,110 +1,206 @@
-rmse = np.sqrt(mean_squared_error(y_test_real, test_pred))
-mae = mean_absolute_error(y_test_real, test_pred)
-r2 = r2_score(y_test_real, test_pred) if len(y_test_real) > 1 else np.nan
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import datetime
+import random
 
-print("\n===== KẾT QUẢ ĐÁNH GIÁ =====")
-print(f"RMSE: {rmse:,.4f}")
-print(f"MAE : {mae:,.4f}")
-print(f"R²  : {r2:.4f}")
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# -------------------------
-# 6. Biểu đồ loss và kết quả test
-# -------------------------
-plt.figure(figsize=(10, 5))
-plt.plot(history.history["loss"], label="Train Loss")
-plt.plot(history.history["val_loss"], label="Validation Loss")
-plt.title(f"LSTM - Train Loss vs Validation Loss ({TICKER})")
-plt.xlabel("Epoch")
-plt.ylabel("Mean Squared Error")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.callbacks import EarlyStopping
 
-test_dates = data_df.index[train_size:]
-plt.figure(figsize=(12, 6))
-plt.plot(test_dates, y_test_real, label="Giá thực tế")
-plt.plot(test_dates, test_pred, label="Giá dự báo")
-plt.title(f"Giá đóng cửa thực tế và dự báo trên tập test - {TICKER}")
-plt.xlabel("Ngày")
-plt.ylabel("Giá đóng cửa")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
+# FIX SEED (Ổn định kết quả dự báo)
+seed = 42
+np.random.seed(seed)
+tf.random.set_seed(seed)
+random.seed(seed)
 
-# -------------------------
-# 7. Dự báo các phiên tiếp theo
-# -------------------------
-last_window = all_scaled[-WINDOW_SIZE:].reshape(1, WINDOW_SIZE, 1)
-future_scaled = []
+# Cấu hình trang Streamlit
+st.set_page_config(page_title="Dự báo Giá Cổ phiếu", page_icon="📈", layout="wide")
 
-for _ in range(FORECAST_DAYS):
-    next_value = model.predict(last_window, verbose=0)[0, 0]
-    future_scaled.append(next_value)
-    next_step = np.array(next_value, dtype="float32").reshape(1, 1, 1)
-    last_window = np.concatenate([last_window[:, 1:, :], next_step], axis=1)
+st.title("📈 Ứng dụng Dự báo Giá Cổ phiếu 10 Ngày Tới (LSTM)")
+st.write("Nhập mã cổ phiếu bên thanh công cụ để huấn luyện mô hình và xem kết quả dự báo.")
 
-future_prices = scaler.inverse_transform(
-    np.array(future_scaled).reshape(-1, 1)
-).ravel()
+# --- THANH CẤU HÌNH (SIDEBAR) ---
+st.sidebar.header("⚙️ Cấu hình dữ liệu")
+ticker_input = st.sidebar.text_input("Nhập mã cổ phiếu:", value="VNM")
+start_date = st.sidebar.date_input("Ngày bắt đầu lấy dữ liệu:", datetime.date(2018, 1, 1))
+end_date = st.sidebar.date_input("Ngày kết thúc:", datetime.date.today())
 
-# Tạo ngày làm việc dự kiến; không bao gồm cuối tuần.
-# Lịch này chưa loại trừ ngày nghỉ lễ của thị trường Việt Nam.
-last_date = data_df.index[-1]
-future_dates = pd.bdate_range(
-    start=last_date + pd.offsets.BDay(1),
-    periods=FORECAST_DAYS
-)
+btn_predict = st.sidebar.button("🚀 Bắt đầu Dự báo", type="primary")
 
-forecast_df = pd.DataFrame({
-    "Ngày dự kiến": future_dates.date,
-    "Giá dự báo": future_prices
-})
+# Tự động thêm đuôi .VN nếu nhập mã Việt Nam (3 ký tự)
+ticker = ticker_input.strip().upper()
+if len(ticker) == 3 and not ticker.endswith(".VN"):
+    ticker = ticker + ".VN"
 
-print(f"\n===== DỰ BÁO {FORECAST_DAYS} PHIÊN TIẾP THEO: {TICKER} =====")
-print(forecast_df.to_string(index=False, formatters={
-    "Giá dự báo": lambda x: f"{x:,.2f}"
-}))
+if btn_predict:
+    with st.spinner(f"Đang tải dữ liệu {ticker} và huấn luyện mô hình LSTM... Vui lòng đợi trong giây lát!"):
+        # 1. Tải dữ liệu từ Yahoo Finance
+        df = yf.download(ticker, start=start_date, end=end_date)
+        
+        if df.empty:
+            st.error(f"❌ Không tìm thấy dữ liệu cho mã '{ticker}'. Vui lòng kiểm tra lại!")
+        else:
+            # Lấy cột giá đóng cửa Close
+            if isinstance(df.columns, pd.MultiIndex):
+                data = df['Close'][[ticker]].values
+            else:
+                data = df[['Close']].values
+                
+            st.success(f"✅ Đã tải thành công {len(data)} phiên giao dịch của *{ticker}*.")
 
-# -------------------------
-# 8. Biểu đồ dự báo tương lai
-# -------------------------
-recent_n = min(90, len(data_df))
-plt.figure(figsize=(12, 6))
-plt.plot(
-    data_df.index[-recent_n:],
-    data_df["Close"].iloc[-recent_n:],
-    label="Giá đóng cửa lịch sử"
-)
-plt.plot(
-    future_dates,
-    future_prices,
-    marker="o",
-    linestyle="--",
-    label=f"Dự báo {FORECAST_DAYS} phiên"
-)
-plt.title(f"Dự báo giá cổ phiếu {TICKER} bằng LSTM")
-plt.xlabel("Ngày")
-plt.ylabel("Giá đóng cửa")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
+            # 2. Chia tập Train (80%) / Test (20%) & Chuẩn hóa dữ liệu
+            train_size = int(0.8 * len(data))
+            train_data = data[:train_size]
+            test_data = data[train_size:]
 
-# -------------------------
-# 9. Lưu kết quả
-# -------------------------
-forecast_df.to_csv(
-    f"du_bao_{TICKER.replace('.', '_')}.csv",
-    index=False,
-    encoding="utf-8-sig"
-)
-print(f"\nĐã lưu kết quả vào du_bao_{TICKER.replace('.', '_')}.csv")
+            scaler = MinMaxScaler()
+            train_scaled = scaler.fit_transform(train_data)
+            test_scaled = scaler.transform(test_data)
 
-print(
-    "\nLưu ý: Đây là dự báo mô hình dựa trên giá lịch sử, "
-    "không phải cam kết giá tương lai hay khuyến nghị mua/bán. "
-    "Ngày dự kiến là ngày làm việc và chưa loại trừ ngày nghỉ lễ."
-)
+            # Hàm tạo chuỗi thời gian (window_size = 60)
+            def create_sequences(data_seq, window_size=60):
+                X, y = [], []
+                for i in range(window_size, len(data_seq)):
+                    X.append(data_seq[i-window_size:i])
+                    y.append(data_seq[i])
+                return np.array(X), np.array(y)
 
+            X_train, y_train = create_sequences(train_scaled)
+            test_combined = np.vstack((train_scaled[-60:], test_scaled))
+            X_test, y_test = create_sequences(test_combined)
+
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+            X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+            val_size = int(0.1 * len(X_train))
+            X_val = X_train[-val_size:]
+            y_val = y_train[-val_size:]
+            X_train_final = X_train[:-val_size]
+            y_train_final = y_train[:-val_size]
+
+            # 3. Xây dựng mô hình LSTM
+            model = Sequential([
+                LSTM(50, return_sequences=True, input_shape=(60, 1)),
+                LSTM(50),
+                Dense(1)
+            ])
+            model.compile(optimizer='adam', loss='mean_squared_error')
+
+            early_stop = EarlyStopping(
+                monitor='val_loss',
+                patience=5,
+                restore_best_weights=True
+            )
+
+            # Train mô hình
+            history = model.fit(
+                X_train_final, y_train_final,
+                validation_data=(X_val, y_val),
+                epochs=10,
+                batch_size=32,
+                shuffle=False,
+                callbacks=[early_stop],
+                verbose=0
+            )
+
+            # 4. Đánh giá trên tập Test
+            test_pred = model.predict(X_test, verbose=0)
+            test_pred = scaler.inverse_transform(test_pred)
+            y_test_real = scaler.inverse_transform(y_test.reshape(-1, 1))
+
+            rmse = np.sqrt(mean_squared_error(y_test_real, test_pred))
+            mae = mean_absolute_error(y_test_real, test_pred)
+            r2 = r2_score(y_test_real, test_pred)
+
+            # 5. Dự báo 10 ngày tiếp theo (Cuốn chiếu)
+            last_60_days = np.vstack((train_scaled, test_scaled))[-60:]
+            last_60_days = last_60_days.reshape(1, 60, 1)
+
+            future_predictions = []
+            for i in range(10):
+                next_pred = model.predict(last_60_days, verbose=0)
+                future_predictions.append(next_pred[0, 0])
+                last_60_days = np.append(
+                    last_60_days[:, 1:, 🙂,
+                    next_pred.reshape(1, 1, 1),
+                    axis=1
+                )
+
+            future_predictions = np.array(future_predictions).reshape(-1, 1)
+            future_predictions = scaler.inverse_transform(future_predictions)
+
+            # Tạo ngày làm việc (tránh ngày cuối tuần) cho 10 ngày dự báo
+            last_date = df.index[-1]
+            future_dates = pd.bdate_range(start=last_date + pd.Timedelta(days=1), periods=10)
+
+            # --- HIỂN THỊ KẾT QUẢ TRÊN GIAO DIỆN ---
+            
+            # Khối 1: Các chỉ số đánh giá mô hình
+            st.markdown("---")
+            st.subheader("📊 Chỉ số đánh giá độ chính xác (Tập Test)")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("RMSE (Sai số căn bình phương)", f"{rmse:,.2f}")
+            c2.metric("MAE (Sai số tuyệt đối trung bình)", f"{mae:,.2f}")
+            c3.metric("R² Score (Độ tương quan)", f"{r2:.4f}")
+
+            # Khối 2: Bảng giá dự báo 10 ngày tới
+            st.markdown("---")
+            st.subheader(f"🔮 Bảng giá dự báo 10 phiên tới cho {ticker}")
+            
+            df_future = pd.DataFrame({
+                "Ngày phiên giao dịch": [d.strftime('%d/%m/%Y') for d in future_dates],
+                "Giá dự báo": future_predictions.flatten()
+            })
+            
+            # Format tiền tệ dễ nhìn
+            st.dataframe(
+                df_future.style.format({"Giá dự báo": "{:,.2f}"}),
+                use_container_width=True
+            )
+
+            # Khối 3: Biểu đồ tương tác Plotly
+            st.markdown("---")
+            st.subheader("📈 Biểu đồ Giá Thực tế & Dự báo")
+            
+            fig = go.Figure()
+
+            # Đường giá thực tế tập test
+            test_dates = df.index[train_size:]
+            fig.add_trace(go.Scatter(
+                x=test_dates, y=y_test_real.flatten(),
+                mode='lines', name='Giá thực tế (Test)',
+                line=dict(color='#1f77b4', width=2)
+            ))
+
+            # Đường dự báo tập test
+            fig.add_trace(go.Scatter(
+                x=test_dates, y=test_pred.flatten(),
+                mode='lines', name='Dự báo tập Test',
+                line=dict(color='#ff7f0e', width=1.5, dash='dash')
+            ))
+
+            # Đường 10 ngày tới
+            fig.add_trace(go.Scatter(
+                x=future_dates, y=future_predictions.flatten(),
+                mode='lines+markers', name='Dự báo 10 ngày tới',
+                line=dict(color='#2ca02c', width=3),
+                marker=dict(size=8)
+            ))
+
+            fig.update_layout(
+                title=f"Biểu đồ dự báo giá cổ phiếu {ticker}",
+                xaxis_title="Thời gian",
+                yaxis_title="Giá đóng cửa",
+                hovermode="x unified",
+                template="plotly_white",
+                height=550
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
