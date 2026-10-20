@@ -127,7 +127,7 @@ if btn_predict:
             for i in range(10):
                 next_pred = model.predict(last_60_days, verbose=0)
                 future_predictions.append(next_pred[0, 0])
-                last_60_days = np.append(
+                last_60_days = np.append
                     last_60_days[:, 1:,
                     next_pred.reshape(1, 1, 1),
                     axis=1
