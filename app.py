@@ -131,7 +131,7 @@ if btn_predict:
                     last_60_days[:, 1:,
                     next_pred.reshape(1, 1, 1),
                     axis=1
-                )
+                    ]
 
             future_predictions = np.array(future_predictions).reshape(-1, 1)
             future_predictions = scaler.inverse_transform(future_predictions)
